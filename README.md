@@ -73,3 +73,7 @@ size is not counted, so snapper snapshots only show up as the difference between
 - `src/ui/`: window, list, treemap widget, actions.
 
 `cargo test` runs the unit tests (scanner fixture, layout, quoting through sh and fish, guard).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
