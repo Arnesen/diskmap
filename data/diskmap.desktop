@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Disk Map
+GenericName=Disk Usage Analyzer
+Comment=See where your SSD space goes and clean it up
+Exec=diskmap %f
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Utility;Filesystem;
+Keywords=disk;usage;space;ssd;storage;du;ncdu;treemap;clean;
+StartupWMClass=dev.txcb.DiskMap
