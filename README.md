@@ -12,21 +12,32 @@ diskmap ~/code     # scan one folder
 
 ## Using it
 
-| Key | Action |
+**Select, then act.** Delete, Trash and Copy command act on the selection and nothing
+else. The selection is never the highlighted list row and never inferred.
+
+- **Select:** click a tile in the treemap (big tiles or the ones nested inside them), tick
+  a row's checkbox, or press Space on a row. Selected tiles are tinted red with a heavy border.
+- **See what's selected:** the bottom bar says e.g. `Selected: ~/.cache/huggingface · 309 GiB`
+  and the button reads `Delete huggingface` / `Delete 3 items`. Click the "Selected" label for
+  the full list, with × to unselect single items.
+- **Delete** deletes the selection immediately. There is no confirmation dialog; the button
+  label *is* the confirmation.
+
+| Key / mouse | Action |
 |---|---|
-| Enter / → / double-click | open folder |
+| click tile | select / unselect that tile |
+| double-click tile, Enter, → | open folder |
 | Backspace / ← | up |
-| Space | mark / unmark (moves down) |
-| Esc | clear marks |
-| O | open in file manager |
-| C | copy ready-to-paste `rm -rf -- '…'` commands (sh **and** fish safe; `sudo` added where needed) |
-| T | move to Trash |
-| Delete | delete permanently (confirmation dialog; Cancel is the default) |
+| Space | select / unselect the highlighted row (moves down) |
+| Esc | clear selection |
+| C | copy `rm -rf -- '…'` for the selection (sh **and** fish safe; `sudo` where needed) |
+| T | move the selection to Trash |
+| Delete | delete the selection permanently |
+| O | open the highlighted row in the file manager |
 | F5 / R | rescan |
 
-Actions apply to the marked items. If nothing is marked, they apply to the selected row.
-Right-clicking a row applies them to that row only, and also offers **Copy path** and
-**Measure real size** (`pkexec compsize`, shown only if `compsize` is installed).
+Right-clicking a row gives Select, Open, Copy path and **Measure real size**
+(`pkexec compsize`, shown only if `compsize` is installed).
 
 ## Honest numbers on btrfs + zstd
 

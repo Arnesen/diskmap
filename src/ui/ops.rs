@@ -43,14 +43,20 @@ pub fn install_actions(app: &Rc<App>) {
         }),
         entry(app, "open", open),
         entry(app, "copy-path", |a| {
-            let text: Vec<String> = a.targets().iter().map(|t| t.path.display().to_string()).collect();
-            a.window.clipboard().set_text(&text.join("\n"));
+            let Some(t) = a.focused() else { return };
+            a.window.clipboard().set_text(&t.path.display().to_string());
             a.toast("Path copied");
         }),
         entry(app, "copy", copy_commands),
         entry(app, "trash", trash),
         entry(app, "delete", delete),
         entry(app, "compsize", compsize),
+        entry(app, "toggle-focused", |a| {
+            if let Some(t) = a.focused() {
+                let on = !a.state.borrow().marks.contains_key(&t.path);
+                a.set_mark(&t.path, t.size, on);
+            }
+        }),
     ];
     app.window.add_action_entries(entries);
 }
@@ -68,7 +74,7 @@ fn choose_folder(app: &Rc<App>) {
 }
 
 fn open(app: &Rc<App>) {
-    let Some(t) = app.targets().into_iter().next() else { return };
+    let Some(t) = app.focused() else { return };
     let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(&t.path)));
     let weak = Rc::downgrade(app);
     let done = move |res: Result<(), glib::Error>| {
@@ -84,7 +90,7 @@ fn open(app: &Rc<App>) {
 }
 
 fn copy_commands(app: &Rc<App>) {
-    let targets = app.targets();
+    let targets = app.selected();
     if targets.is_empty() {
         return;
     }
@@ -116,7 +122,7 @@ fn allowed(app: &Rc<App>, targets: Vec<Target>) -> Vec<Target> {
 }
 
 fn trash(app: &Rc<App>) {
-    trash_list(app, allowed(app, app.targets()));
+    trash_list(app, allowed(app, app.selected()));
 }
 
 fn trash_list(app: &Rc<App>, targets: Vec<Target>) {
@@ -153,36 +159,15 @@ fn trash_list(app: &Rc<App>, targets: Vec<Target>) {
     });
 }
 
+/// Delete exactly the selection, straight away. The action bar names what
+/// that is; there is deliberately no confirmation dialog.
 fn delete(app: &Rc<App>) {
-    let targets = allowed(app, app.targets());
+    let targets = allowed(app, app.selected());
     if targets.is_empty() {
         return;
     }
-    let total: u64 = targets.iter().map(|t| t.size).sum();
-    let mut body: Vec<String> = targets.iter().take(8).map(|t| format!("{}  ({})", t.path.display(), human(t.size))).collect();
-    if targets.len() > 8 {
-        body.push(format!("… and {} more", targets.len() - 8));
-    }
-    body.push(String::new());
-    body.push(format!("{} apparent. This cannot be undone.", human(total)));
-    let n = targets.len();
-    let dialog = adw::AlertDialog::new(Some(&format!("Delete {n} item{} permanently?", plural(n))), Some(&body.join("\n")));
-    dialog.add_responses(&[("cancel", "Cancel"), ("trash", "Move to Trash"), ("delete", "Delete permanently")]);
-    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-
-    let weak = Rc::downgrade(app);
-    glib::spawn_future_local(async move {
-        let Some(window) = weak.upgrade().map(|a| a.window.clone()) else { return };
-        let response = dialog.choose_future(Some(&window)).await;
-        let Some(app) = weak.upgrade() else { return };
-        match response.as_str() {
-            "trash" => trash_list(&app, targets),
-            "delete" => delete_now(&app, targets).await,
-            _ => {}
-        }
-    });
+    let app = app.clone();
+    glib::spawn_future_local(async move { delete_now(&app, targets).await });
 }
 
 async fn delete_now(app: &Rc<App>, targets: Vec<Target>) {
@@ -308,7 +293,7 @@ fn report_failures(app: &Rc<App>, verb: &str, failed: Vec<(PathBuf, String)>) {
 }
 
 fn compsize(app: &Rc<App>) {
-    let Some(t) = app.targets().into_iter().next() else { return };
+    let Some(t) = app.focused() else { return };
     let weak = Rc::downgrade(app);
     app.toast(&format!("Measuring real size of {}…", t.path.display()));
     glib::spawn_future_local(async move {

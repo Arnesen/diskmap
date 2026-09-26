@@ -79,6 +79,12 @@ fn stroke(cr: &cairo::Context, r: Rect, color: &gdk::RGBA, width: f64) {
     let _ = cr.stroke();
 }
 
+/// Selected = will be deleted: tint the whole tile and give it a heavy border.
+fn selected_overlay(cr: &cairo::Context, r: Rect, mark: &gdk::RGBA) {
+    fill(cr, r, &with_alpha(mark, 0.42));
+    stroke(cr, r, mark, 3.0);
+}
+
 pub fn setup(app: &Rc<App>) {
     let weak = Rc::downgrade(app);
     app.treemap.set_draw_func(move |area, cr, w, h| {
@@ -128,17 +134,17 @@ pub fn setup(app: &Rc<App>) {
                         label(area, cr, &text, ir, false, &ink_for(&c));
                     }
                     if st.marks.contains_key(&base.join(&*child.name).join(&*g.name)) {
-                        stroke(cr, ir, &p.mark, 3.0);
+                        selected_overlay(cr, ir, &p.mark);
                     }
                 }
             } else if r.w > 50.0 && r.h > 34.0 {
                 label(area, cr, &format!("{}\n{}", child.name, human(child.size)), r, true, &ink_for(&base_color));
             }
             if st.marks.contains_key(&base.join(&*child.name)) {
-                stroke(cr, r, &p.mark, 3.0);
+                selected_overlay(cr, r, &p.mark);
             }
             if selected == Some(i) {
-                stroke(cr, r, &p.text, 2.0);
+                stroke(cr, r, &with_alpha(&p.text, 0.6), 1.0);
             }
         }
         drop(st);
@@ -185,6 +191,7 @@ pub fn setup(app: &Rc<App>) {
         if hit.inner.is_some() {
             text = format!("{}/{text}", child.name);
         }
+        text.push_str("\nClick to select · double-click to open");
         tip.set_text(Some(&text));
         true
     });
@@ -196,9 +203,13 @@ pub fn setup(app: &Rc<App>) {
         let Some(app) = weak.upgrade() else { return };
         let Some(hit) = app.tm.hit(x, y) else { return };
         if n == 1 {
+            // Click selects/unselects exactly the tile under the pointer.
+            app.toggle_hit(hit);
             app.selection.set_selected(hit.child as u32);
             app.view.scroll_to(hit.child as u32, None, gtk::ListScrollFlags::FOCUS, None);
         } else if n == 2 {
+            // The first click of a double-click toggled; undo it, then drill in.
+            app.toggle_hit(hit);
             let depth = app.state.borrow().cwd.len();
             app.enter(hit.child);
             let entered = app.state.borrow().cwd.len() > depth;
@@ -211,6 +222,21 @@ pub fn setup(app: &Rc<App>) {
 }
 
 impl App {
+    fn toggle_hit(self: &Rc<Self>, hit: Hit) {
+        let target = {
+            let st = self.state.borrow();
+            let (Some(base), Some(child)) = (st.cwd_path(), st.cwd_node().and_then(|n| n.children.get(hit.child))) else {
+                return;
+            };
+            match hit.inner.and_then(|j| child.children.get(j)) {
+                Some(g) => (base.join(&*child.name).join(&*g.name), g.size),
+                None => (base.join(&*child.name), child.size),
+            }
+        };
+        let on = !self.state.borrow().marks.contains_key(&target.0);
+        self.set_mark(&target.0, target.1, on);
+    }
+
     /// After drilling into a folder from an inner tile: enter it if it is a
     /// folder, otherwise select it.
     fn select_or_enter(self: &Rc<Self>, j: usize) {

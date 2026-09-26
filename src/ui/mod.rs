@@ -91,8 +91,8 @@ pub struct App {
     pub selection: gtk::SingleSelection,
     pub view: gtk::ColumnView,
     pub treemap: gtk::DrawingArea,
-    target_label: gtk::Label,
-    clear_button: gtk::Button,
+    selected_button: gtk::MenuButton,
+    delete_button: gtk::Button,
     pub state: RefCell<State>,
     pub palette: theme::Palette,
     progress: RefCell<Option<Arc<scan::Progress>>>,
@@ -238,30 +238,22 @@ pub fn build(application: &adw::Application, root: PathBuf) {
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&stack));
 
-    // Action bar: acts on marked items, or on the selected row if none are marked.
-    let target_label = gtk::Label::builder()
-        .xalign(0.0)
-        .ellipsize(gtk::pango::EllipsizeMode::Middle)
+    // Action bar: Delete / Trash / Copy command act on the selection and nothing else.
+    let selected_button = gtk::MenuButton::builder()
+        .tooltip_text("Show exactly what is selected")
         .css_classes(["numeric"])
         .build();
-    let clear_button = gtk::Button::builder()
-        .label("Clear marks")
-        .action_name("win.clear-marks")
-        .css_classes(["flat"])
-        .visible(false)
-        .build();
     let action_bar = gtk::ActionBar::new();
-    action_bar.pack_start(&target_label);
-    action_bar.pack_start(&clear_button);
+    action_bar.pack_start(&selected_button);
     let button = |label: &str, action: &str, tip: &str| {
         gtk::Button::builder().label(label).action_name(action).tooltip_text(tip).build()
     };
-    let delete_button = button("Delete…", "win.delete", "Delete permanently (Shift+Del)");
+    let delete_button = button("Delete", "win.delete", "Delete the selected items permanently (Delete)");
     delete_button.add_css_class("destructive-action");
     action_bar.pack_end(&delete_button);
-    action_bar.pack_end(&button("Trash", "win.trash", "Move to Trash (T)"));
-    action_bar.pack_end(&button("Copy command", "win.copy", "Copy rm commands to paste in a terminal (C)"));
-    action_bar.pack_end(&button("Open", "win.open", "Show in file manager (O)"));
+    action_bar.pack_end(&button("Trash", "win.trash", "Move the selected items to Trash (T)"));
+    action_bar.pack_end(&button("Copy command", "win.copy", "Copy rm commands for the selected items (C)"));
+    action_bar.pack_end(&button("Open", "win.open", "Show the highlighted row in the file manager (O)"));
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
@@ -289,8 +281,8 @@ pub fn build(application: &adw::Application, root: PathBuf) {
         selection,
         view,
         treemap,
-        target_label,
-        clear_button,
+        selected_button,
+        delete_button,
         state: RefCell::new(State {
             scan: None,
             cwd: Vec::new(),
@@ -526,22 +518,23 @@ impl App {
         }
     }
 
-    /// What the action bar and shortcuts will act on.
-    pub fn targets(&self) -> Vec<Target> {
+    /// The selection: what Delete, Trash and Copy command act on. Nothing else.
+    pub fn selected(&self) -> Vec<Target> {
+        self.state
+            .borrow()
+            .effective_marks()
+            .into_iter()
+            .map(|(path, size)| Target { is_dir: path.is_dir(), path, size })
+            .collect()
+    }
+
+    /// The row a right-click menu is open on, else the highlighted list row
+    /// (for Open, Copy path and Measure; never for deleting).
+    pub fn focused(&self) -> Option<Target> {
         if let Some(t) = self.context_target.borrow().clone() {
-            return vec![t];
+            return Some(t);
         }
-        let st = self.state.borrow();
-        if !st.marks.is_empty() {
-            return st
-                .effective_marks()
-                .into_iter()
-                .map(|(path, size)| Target { is_dir: path.is_dir(), path, size })
-                .collect();
-        }
-        self.selected_row()
-            .map(|r| vec![Target { is_dir: r.kind == scan::Kind::Dir, path: r.path, size: r.size }])
-            .unwrap_or_default()
+        self.selected_row().map(|r| Target { is_dir: r.kind == scan::Kind::Dir, path: r.path, size: r.size })
     }
 
     pub fn selected_row(&self) -> Option<list::Row> {
@@ -549,28 +542,102 @@ impl App {
         Some(obj.borrow::<list::Row>().clone())
     }
 
-    pub fn update_targets(&self) {
-        let marked = self.state.borrow().effective_marks();
-        self.clear_button.set_visible(!marked.is_empty());
-        let text = if marked.is_empty() {
-            match self.selected_row() {
-                Some(r) => format!("{}  ·  {}", r.name, human(r.size)),
-                None => String::new(),
-            }
+    /// Show the scan-root-relative path, e.g. "~/.cache/huggingface".
+    fn short_path(&self, p: &Path) -> String {
+        let home = &self.state.borrow().home;
+        match p.strip_prefix(home) {
+            Ok(rel) => format!("~/{}", rel.display()),
+            Err(_) => p.display().to_string(),
+        }
+    }
+
+    pub fn update_targets(self: &Rc<Self>) {
+        let sel = self.selected();
+        let total: u64 = sel.iter().map(|t| t.size).sum();
+        let n = sel.len();
+        if n == 0 {
+            self.selected_button.set_label("Nothing selected — click tiles or press Space");
+            self.selected_button.set_sensitive(false);
+            self.selected_button.set_popover(None::<&gtk::Popover>);
+            self.delete_button.set_label("Delete");
         } else {
-            let total: u64 = marked.iter().map(|(_, s)| s).sum();
-            format!("{} marked  ·  {} apparent", marked.len(), human(total))
-        };
-        self.target_label.set_text(&text);
-        let any = !self.targets().is_empty();
-        for name in ["open", "copy", "trash", "delete", "copy-path"] {
+            self.selected_button.set_sensitive(true);
+            let what = if n == 1 {
+                self.short_path(&sel[0].path)
+            } else {
+                format!("{n} items")
+            };
+            self.selected_button.set_label(&format!("Selected: {what}  ·  {}", human(total)));
+            self.delete_button.set_label(&if n == 1 {
+                format!("Delete {}", sel[0].path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())
+            } else {
+                format!("Delete {n} items")
+            });
+            self.selected_button.set_popover(Some(&self.selection_popover(&sel)));
+        }
+        for name in ["copy", "trash", "delete"] {
             if let Some(a) = self.window.lookup_action(name) {
-                a.downcast::<gio::SimpleAction>().unwrap().set_enabled(any);
+                a.downcast::<gio::SimpleAction>().unwrap().set_enabled(n > 0);
+            }
+        }
+        let focus = self.focused().is_some();
+        for name in ["open", "copy-path", "compsize"] {
+            if let Some(a) = self.window.lookup_action(name) {
+                a.downcast::<gio::SimpleAction>().unwrap().set_enabled(focus);
             }
         }
     }
 
-    pub fn set_mark(&self, path: &Path, size: u64, on: bool) {
+    fn selection_popover(self: &Rc<Self>, sel: &[Target]) -> gtk::Popover {
+        let bx = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(8)
+            .margin_end(8)
+            .build();
+        bx.append(&gtk::Label::builder().label("Delete / Trash / Copy command act on exactly these:").xalign(0.0).css_classes(["heading"]).build());
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        for t in sel.iter().take(300) {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(
+                &gtk::Label::builder()
+                    .label(self.short_path(&t.path))
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                    .max_width_chars(60)
+                    .tooltip_text(t.path.display().to_string())
+                    .build(),
+            );
+            row.append(&gtk::Label::builder().label(human(t.size)).css_classes(["numeric", "dim-label"]).build());
+            let x = gtk::Button::builder().icon_name("window-close-symbolic").css_classes(["flat", "circular"]).tooltip_text("Unselect").build();
+            let (weak, path) = (Rc::downgrade(self), t.path.clone());
+            x.connect_clicked(move |_| {
+                if let Some(app) = weak.upgrade() {
+                    app.set_mark(&path, 0, false);
+                    if !app.selected().is_empty() {
+                        app.selected_button.popup();
+                    }
+                }
+            });
+            row.append(&x);
+            list.append(&row);
+        }
+        bx.append(
+            &gtk::ScrolledWindow::builder()
+                .child(&list)
+                .propagate_natural_height(true)
+                .max_content_height(420)
+                .min_content_width(420)
+                .build(),
+        );
+        bx.append(&gtk::Button::builder().label("Clear selection (Esc)").action_name("win.clear-marks").halign(gtk::Align::End).css_classes(["flat"]).build());
+        gtk::Popover::builder().child(&bx).build()
+    }
+
+    pub fn set_mark(self: &Rc<Self>, path: &Path, size: u64, on: bool) {
         {
             let mut st = self.state.borrow_mut();
             if on {

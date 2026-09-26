@@ -199,18 +199,13 @@ fn context_menu(app: &Rc<App>, widget: &gtk::Widget, row: &Row, x: f64, y: f64) 
     app.update_targets();
 
     let menu = gio::Menu::new();
-    let top = gio::Menu::new();
-    top.append(Some("Open in file manager"), Some("win.open"));
-    top.append(Some("Copy path"), Some("win.copy-path"));
-    top.append(Some("Copy delete command"), Some("win.copy"));
+    let marked = app.state.borrow().marks.contains_key(&row.path);
+    menu.append(Some(if marked { "Unselect" } else { "Select" }), Some("win.toggle-focused"));
+    menu.append(Some("Open in file manager"), Some("win.open"));
+    menu.append(Some("Copy path"), Some("win.copy-path"));
     if app.has_compsize && row.kind == Kind::Dir {
-        top.append(Some("Measure real size (compsize)"), Some("win.compsize"));
+        menu.append(Some("Measure real size (compsize)"), Some("win.compsize"));
     }
-    menu.append_section(None, &top);
-    let danger = gio::Menu::new();
-    danger.append(Some("Move to Trash"), Some("win.trash"));
-    danger.append(Some("Delete permanently…"), Some("win.delete"));
-    menu.append_section(None, &danger);
 
     let popover = gtk::PopoverMenu::builder().menu_model(&menu).has_arrow(false).build();
     popover.set_parent(widget);
